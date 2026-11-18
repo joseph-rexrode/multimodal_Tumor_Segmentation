@@ -77,6 +77,19 @@ end
 
 % testing one slice: 8-53
 
+function pred = OtsuMethod(img)
+    brainOnly = img > 0;
+    threshold = graythresh(img(brainOnly));
+    pred = imbinarize(img, threshold) & brainOnly;
+end
+
+
+function pred = MultiOtsuMethod(img)
+    brainOnly = img > 0;
+    threshold = multithresh(img(brainOnly), 2);
+    pred = (img > threshold(end)) & brainOnly;
+end
+
 function runSliceTest(outputFolder)
     testFilePattern = fullfile(outputFolder, ...
                         '*', ...
@@ -95,8 +108,6 @@ function runSliceTest(outputFolder)
     enhancing = groundTruth == 255;
     tumorCore = (groundTruth == 85) | (groundTruth == 255);
     
-    
-    
     for i = 2:length(testMatchingFiles)
     
         % Step 1: Brain-only mask
@@ -105,13 +116,8 @@ function runSliceTest(outputFolder)
                      testMatchingFiles(i).folder, ...
                      testMatchingFiles(i).name));
     
-        brainOnly = img > 0;
-    
         % Step 2: Otsu's method
-        
-        img_otsu = graythresh(img(brainOnly));
-        otsu_pred = imbinarize(img, img_otsu) & brainOnly;
-    
+        otsu_pred = OtsuMethod(img)
         otsu_similarity = dice(otsu_pred, groundTruth);
     
         fprintf('%s | Dice vs enhancing: %.3f | Jaccard: %.3f | Dice vs whole: %.3f\n', ...
@@ -119,6 +125,8 @@ function runSliceTest(outputFolder)
             jaccard(otsu_pred, enhancing), dice(otsu_pred, wholeTumor));
     
         % Step 3: Multi-Otsu
+
+        multi_otsu_pred = MultiOtsuMethod(img)
     
     
         
@@ -136,10 +144,10 @@ function score = jaccard(pred, gt)
     score = nnz(pred & gt) / nnz(pred | gt);
 end
 
-
-
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
 %% 
+
+
 % Loading in data, for now replace the below with your own local files
 
 parentFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/BraTS2026subset";
@@ -147,6 +155,6 @@ outputFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2D
 rawFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2DSlices/raw";
 segmentFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2DSlices/groundTruth";
 
-niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder)
-convert2DFiles(niiFiles, rawFolder, segmentFolder)
-runSliceTest(outputFolder)
+niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
+convert2DFiles(niiFiles, rawFolder, segmentFolder);
+runSliceTest(outputFolder);
