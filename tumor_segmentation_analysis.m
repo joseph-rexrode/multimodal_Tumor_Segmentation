@@ -150,10 +150,12 @@ end
 
 % Loading in data, for now replace the below with your own local files
 
-parentFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/BraTS2026subset";
-outputFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2DSlices";
-rawFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2DSlices/raw";
-segmentFolder = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject/2DSlices/groundTruth";
+sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
+
+parentFolder  = strcat(sharedPath, "/BraTS2026subset");
+outputFolder  = strcat(sharedPath, "/2DSlices");
+rawFolder     = strcat(sharedPath, "/2DSlices/raw");
+segmentFolder = strcat(sharedPath, "/2DSlices/groundTruth");
 
 niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
 convert2DFiles(niiFiles, rawFolder, segmentFolder);
