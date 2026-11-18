@@ -83,11 +83,29 @@ function pred = OtsuMethod(img)
     pred = imbinarize(img, threshold) & brainOnly;
 end
 
-
 function pred = MultiOtsuMethod(img)
     brainOnly = img > 0;
     threshold = multithresh(img(brainOnly), 2);
     pred = (img > threshold(end)) & brainOnly;
+end
+
+function printScores(methodName, fileName, pred, enhancing, wholeTumor)
+    fprintf('%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n\n', ...
+        methodName, fileName, ...
+        dice(pred, enhancing), ...
+        jaccard(pred, enhancing), dice(pred, wholeTumor));
+
+       
+end
+
+function scoreSliceImages(testMatchingFiles, segmentMethod, methodName, enhancing, wholeTumor)
+    for i = 2:numel(testMatchingFiles)
+        file = testMatchingFiles(i);
+        img = imread(fullfile(file.folder, file.name));
+
+        pred = segmentMethod(img);
+        printScores(methodName, file.name, pred, enhancing, wholeTumor);
+    end
 end
 
 function runSliceTest(outputFolder)
@@ -108,29 +126,32 @@ function runSliceTest(outputFolder)
     enhancing = groundTruth == 255;
     tumorCore = (groundTruth == 85) | (groundTruth == 255);
     
-    for i = 2:length(testMatchingFiles)
-    
-        % Step 1: Brain-only mask
-    
-        img = imread(fullfile( ...
-                     testMatchingFiles(i).folder, ...
-                     testMatchingFiles(i).name));
-    
-        % Step 2: Otsu's method
-        otsu_pred = OtsuMethod(img)
-        otsu_similarity = dice(otsu_pred, groundTruth);
-    
-        fprintf('%s | Dice vs enhancing: %.3f | Jaccard: %.3f | Dice vs whole: %.3f\n', ...
-            testMatchingFiles(i).name, dice(otsu_pred, enhancing), ...
-            jaccard(otsu_pred, enhancing), dice(otsu_pred, wholeTumor));
-    
-        % Step 3: Multi-Otsu
+    scoreSliceImages(testMatchingFiles, @OtsuMethod, "Otsu", enhancing, wholeTumor);
+    scoreSliceImages(testMatchingFiles, @MultiOtsuMethod, "Multi-Otsu", enhancing, wholeTumor);
 
-        multi_otsu_pred = MultiOtsuMethod(img)
-    
-    
-        
-    end
+    % This was moved to the generic function for both Otsu and MultiOtsu
+        % You can pass in an ANON function to run the appropriate function
+        % on the data
+    % for i = 2:length(testMatchingFiles)
+    % 
+    %     % Step 1: Brain-only mask
+    % 
+    %     img = imread(fullfile( ...
+    %                  testMatchingFiles(i).folder, ...
+    %                  testMatchingFiles(i).name));
+    % 
+    %     % Step 2: Otsu's method
+    %     otsu_pred = OtsuMethod(img);
+    %     otsu_similarity = dice(otsu_pred, groundTruth);
+    % 
+    %     fileName = testMatchingFiles(i).name;
+    %     printScores("Otsu", fileName, otsu_pred, enchancing, wholeTumor);
+    % 
+    %     % Step 3: Multi-Otsu
+    % 
+    %     multi_otsu_pred = MultiOtsuMethod(img);
+    %     printScores("Multi Otsu", fileName, multi_otsu_pred, enchancing, wholeTumor);
+    % end
 end
 
 
@@ -161,12 +182,11 @@ function path = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_share
 end
 
 % Loading in data, for now replace the below with your own local files
-
 Joesph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
 Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
 Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
 
-name = "Aaron"
+name = "Aaron";
 sharedPath = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
 
 
