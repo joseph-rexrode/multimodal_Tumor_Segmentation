@@ -147,15 +147,33 @@ end
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
 %% 
 
+                                % Lol JAN
+function path = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
+    if(name == "Joesph")
+        path = Joesph_sharedPath;
+    elseif(name == "Aaron")
+          path = Aaron_sharedPath;
+    elseif(name == "Neeka")
+        path = Neeka_sharedPath;
+    else
+        path = "INVALID";
+    end
+end
 
 % Loading in data, for now replace the below with your own local files
 
-sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
+Joesph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
+Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
+Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
 
-parentFolder  = strcat(sharedPath, "/BraTS2026subset");
-outputFolder  = strcat(sharedPath, "/2DSlices");
-rawFolder     = strcat(sharedPath, "/2DSlices/raw");
-segmentFolder = strcat(sharedPath, "/2DSlices/groundTruth");
+name = "Aaron"
+sharedPath = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
+
+
+parentFolder  = fullfile(sharedPath,   "BraTS2026subset");
+outputFolder  = fullfile(sharedPath,   "2DSlices");
+rawFolder     = fullfile(outputFolder, "raw");
+segmentFolder = fullfile(outputFolder, "groundTruth");
 
 niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
 convert2DFiles(niiFiles, rawFolder, segmentFolder);
