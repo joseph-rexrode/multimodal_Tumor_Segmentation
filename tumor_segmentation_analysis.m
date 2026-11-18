@@ -89,6 +89,34 @@ function pred = MultiOtsuMethod(img)
     pred = (img > threshold(end)) & brainOnly;
 end
 
+function pred = KMeansMethod(img, k)
+    if nargin < 2, k = 4; end
+    brainOnly = img > 0;
+    x = double(img(brainOnly));
+
+    rng(1);                                    % reproducible clusters
+    [idx, C] = kmeans(x, k, 'Replicates', 5, 'MaxIter', 200);
+
+    [~, tumorCluster] = max(C);                % brightest centroid = tumor candidate
+    pred = false(size(img));
+    pred(brainOnly) = (idx == tumorCluster);
+end
+
+function pred = KMeansMultiMethod(stack, k, targetChannel)
+    brainOnly = any(stack > 0, 3);
+    nCh = size(stack, 3);
+    
+    feat = reshape(double(stack), [], nCh);
+    feat = zscore(feat(brainOnly(:), :));      % put modalities on a common scale
+    
+    rng(1);
+    [idx, C] = kmeans(feat, k, 'Replicates', 5, 'MaxIter', 200);
+    
+    [~, tumorCluster] = max(C(:, targetChannel));
+    pred = false(size(brainOnly));
+    pred(brainOnly) = (idx == tumorCluster);
+end
+
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
         methodName, fileName, ...
@@ -127,6 +155,10 @@ function runSliceTest(outputFolder)
     
     scoreSliceImages(testMatchingFiles, @OtsuMethod, "Otsu", enhancing, wholeTumor);
     scoreSliceImages(testMatchingFiles, @MultiOtsuMethod, "Multi-Otsu", enhancing, wholeTumor);
+    for k = 2:5
+        scoreSliceImages(testMatchingFiles, @(img) KMeansMethod(img, k), ...
+            sprintf("KMeans k=%d", k), enhancing, wholeTumor);
+    end
 
     % This was moved to the generic function for both Otsu and MultiOtsu
         % You can pass in an ANON function to run the appropriate function
@@ -154,7 +186,7 @@ function runSliceTest(outputFolder)
 end
 
 
-%% Evaluation Functions
+%% Evaluation / Helper Functions
 
 function roll = dice(pred, gt)
     roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
@@ -162,6 +194,23 @@ end
 
 function score = jaccard(pred, gt)
     score = nnz(pred & gt) / nnz(pred | gt);
+end
+
+function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
+    files = dir(fullfile(outputFolder, '*', ...
+        sprintf('*%s*slice_%03d.png', patientID, sliceNum)));
+    names = {files.name};
+    
+    mods = ["t1n" "t1c" "t2w" "t2f"];
+    imgs = cell(1, numel(mods));
+    for m = 1:numel(mods)
+        f = files(contains(names, "-" + mods(m) + "_"));
+        imgs{m} = imread(fullfile(f(1).folder, f(1).name));
+    end
+    stack = cat(3, imgs{:});
+    
+    f = files(contains(names, "-seg_"));
+    gt = imread(fullfile(f(1).folder, f(1).name));
 end
 
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
@@ -185,7 +234,7 @@ Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProje
 Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
 Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
 
-name = "Aaron";
+name = "Joseph";
 sharedPath = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
 
 
