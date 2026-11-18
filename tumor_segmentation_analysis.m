@@ -90,12 +90,10 @@ function pred = MultiOtsuMethod(img)
 end
 
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
-    fprintf('%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n\n', ...
+    fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
         methodName, fileName, ...
         dice(pred, enhancing), ...
         jaccard(pred, enhancing), dice(pred, wholeTumor));
-
-       
 end
 
 function scoreSliceImages(testMatchingFiles, segmentMethod, methodName, enhancing, wholeTumor)
@@ -105,6 +103,7 @@ function scoreSliceImages(testMatchingFiles, segmentMethod, methodName, enhancin
 
         pred = segmentMethod(img);
         printScores(methodName, file.name, pred, enhancing, wholeTumor);
+        fprintf("\n")
     end
 end
 
