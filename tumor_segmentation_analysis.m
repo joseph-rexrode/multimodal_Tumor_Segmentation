@@ -267,8 +267,6 @@ function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
 end
 
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
-%% 
-
                                 % Lol JAN
 function path = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
     if(name == "Joseph")
