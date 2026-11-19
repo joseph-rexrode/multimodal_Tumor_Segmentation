@@ -285,7 +285,7 @@ end
 % Loading in data, for now replace the below with your own local files
 Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
 Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
-Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
+Neeka_sharedPath = "/Users/neeka/Documents/medicalimage analysis/finalproject";
 
 name = "Aaron";
 sharedPath = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
