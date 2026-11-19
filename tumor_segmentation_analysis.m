@@ -89,21 +89,79 @@ function pred = MultiOtsuMethod(img)
     pred = (img > threshold(end)) & brainOnly;
 end
 
+
+
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
         methodName, fileName, ...
         dice(pred, enhancing), ...
         jaccard(pred, enhancing), dice(pred, wholeTumor));
 end
+                                                            %SegMethod is a
+                                                            %ANON function
+function predictions = scoreSliceImages(methodName, segmentMethod, testMatchingFiles, enhancing, wholeTumor)
+    predictions = cell(size(testMatchingFiles));
 
-function scoreSliceImages(testMatchingFiles, segmentMethod, methodName, enhancing, wholeTumor)
     for i = 2:numel(testMatchingFiles)
         file = testMatchingFiles(i);
         img = imread(fullfile(file.folder, file.name));
 
         pred = segmentMethod(img);
+        predictions{i} = pred;
         printScores(methodName, file.name, pred, enhancing, wholeTumor);
-        fprintf("\n")
+    end
+    fprintf("\n")
+end
+
+function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred)
+    nexttile;
+    imshow(img, []);
+    title(upper(mode) + "MRI");
+    
+    nexttile;
+    imshow(wholeTumor);
+    title("Reference: Whole Tumor");
+    
+    nexttile;
+    imshow(otsuPred);
+    title("Otsu");
+    
+    nexttile;
+    imshow(multiOtsuPred);
+    title("Multi-Otsu");
+end
+
+function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks)
+    close all;
+    % T1C: T1-wted with constrast: brightens areas, enhancing tumor areas
+    % T1N: T1-wted with no constrast, Brain Anatomy with pre-contrast
+    % appearance
+    
+    % T2W: T2-wted Water rich areas, including edema and cerebrospinal fluid  
+    
+    fileNames = string({testMatchingFiles.name});
+    
+    for mode = ["t1c", "t2w"]
+        suffix = "-" + mode + "_slice_053.png";
+        % idx = find(endswith(string({fileNames}), suffix), 1);
+        % idx = find(contains(string({fileNames}), suffix), 1);
+        idx = find(contains(fileNames, suffix), 1);
+    
+        if isempty(idx)
+            warning("No matching PNG found for %s.", mode);
+            continue
+        end
+    
+        file = testMatchingFiles(idx);
+        img = imread(fullfile(file.folder, file.name));
+    
+        otsuPred = ostuMasks{idx};
+        multiOtsuPred = multiOtsuMasks{idx};
+    
+        figure("Name", file.name, "NumberTitle", "off");
+        tiledlayout(1, 4, "TileSpacing", "Compact");
+    
+        printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred)
     end
 end
 
@@ -125,8 +183,10 @@ function runSliceTest(outputFolder)
     enhancing = groundTruth == 255;
     tumorCore = (groundTruth == 85) | (groundTruth == 255);
     
-    scoreSliceImages(testMatchingFiles, @OtsuMethod, "Otsu", enhancing, wholeTumor);
-    scoreSliceImages(testMatchingFiles, @MultiOtsuMethod, "Multi-Otsu", enhancing, wholeTumor);
+    otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
+    multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
+
+    showSliceComparison(testMatchingFiles, wholeTumor, otsuMasks, multiOtsuMasks);
 
     % This was moved to the generic function for both Otsu and MultiOtsu
         % You can pass in an ANON function to run the appropriate function
@@ -155,7 +215,6 @@ end
 
 
 %% Evaluation Functions
-
 function roll = dice(pred, gt)
     roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
 end
@@ -188,12 +247,14 @@ Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
 name = "Aaron";
 sharedPath = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
 
-
+% Extract file paths
 parentFolder  = fullfile(sharedPath,   "BraTS2026subset");
 outputFolder  = fullfile(sharedPath,   "2DSlices");
 rawFolder     = fullfile(outputFolder, "raw");
 segmentFolder = fullfile(outputFolder, "groundTruth");
 
+% Run slicing algos: (Multi)Otsu
 niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
 convert2DFiles(niiFiles, rawFolder, segmentFolder);
 runSliceTest(outputFolder);
+
