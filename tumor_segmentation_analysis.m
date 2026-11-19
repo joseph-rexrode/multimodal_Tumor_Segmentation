@@ -89,7 +89,33 @@ function pred = MultiOtsuMethod(img)
     pred = (img > threshold(end)) & brainOnly;
 end
 
+function pred = KMeansMethod(img, k)
+    if nargin < 2, k = 4; end
+    brainOnly = img > 0;
+    x = double(img(brainOnly));
 
+    rng(1);                                    % reproducible clusters
+    [idx, C] = kmeans(x, k, 'Replicates', 5, 'MaxIter', 200);
+
+    [~, tumorCluster] = max(C);                % brightest centroid = tumor candidate
+    pred = false(size(img));
+    pred(brainOnly) = (idx == tumorCluster);
+end
+
+function pred = KMeansMultiMethod(stack, k, targetChannel)
+    brainOnly = any(stack > 0, 3);
+    nCh = size(stack, 3);
+    
+    feat = reshape(double(stack), [], nCh);
+    feat = zscore(feat(brainOnly(:), :));      % put modalities on a common scale
+    
+    rng(1);
+    [idx, C] = kmeans(feat, k, 'Replicates', 5, 'MaxIter', 200);
+    
+    [~, tumorCluster] = max(C(:, targetChannel));
+    pred = false(size(brainOnly));
+    pred(brainOnly) = (idx == tumorCluster);
+end
 
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
@@ -113,7 +139,7 @@ function predictions = scoreSliceImages(methodName, segmentMethod, testMatchingF
     fprintf("\n")
 end
 
-function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred)
+function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimodalMask, displayK)
     nexttile;
     imshow(img, []);
     title(upper(mode) + "MRI");
@@ -129,9 +155,13 @@ function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred)
     nexttile;
     imshow(multiOtsuPred);
     title("Multi-Otsu");
+
+    nexttile;
+    imshow(multimodalMask);
+    title(sprintf("Multimodal K-means (k=%d)", displayK));
 end
 
-function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks)
+function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, displayK)
     close all;
     % T1C: T1-wted with constrast: brightens areas, enhancing tumor areas
     % T1N: T1-wted with no constrast, Brain Anatomy with pre-contrast
@@ -143,9 +173,12 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
     
     for mode = ["t1c", "t2w"]
         suffix = "-" + mode + "_slice_053.png";
+        % Ideally endswith should've worked but I guess I need to update my
+        % MATLAB? -Aaron
         % idx = find(endswith(string({fileNames}), suffix), 1);
         % idx = find(contains(string({fileNames}), suffix), 1);
         idx = find(contains(fileNames, suffix), 1);
+        multimodalMask = displayMasks{idx};
     
         if isempty(idx)
             warning("No matching PNG found for %s.", mode);
@@ -159,9 +192,19 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
         multiOtsuPred = multiOtsuMasks{idx};
     
         figure("Name", file.name, "NumberTitle", "off");
-        tiledlayout(1, 4, "TileSpacing", "Compact");
+        tiledlayout(1, 5, "TileSpacing", "Compact");
     
-        printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred)
+        printCompTitles(mode, img, wholeTumor, otsuPred, ...
+        multiOtsuPred, multimodalMask, displayK)
+    end
+end
+
+function kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor)
+    kMeansMasks = cell(1, 5);
+
+    for k = 2:5
+        kMeansMasks{k} = scoreSliceImages(sprintf("KMeans k=%d", k), ...
+            @(img) KMeansMethod(img, k), testMatchingFiles, enhancing, wholeTumor);
     end
 end
 
@@ -185,36 +228,19 @@ function runSliceTest(outputFolder)
     
     otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
     multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
-
-    showSliceComparison(testMatchingFiles, wholeTumor, otsuMasks, multiOtsuMasks);
-
-    % This was moved to the generic function for both Otsu and MultiOtsu
-        % You can pass in an ANON function to run the appropriate function
-        % on the data
-    % for i = 2:length(testMatchingFiles)
-    % 
-    %     % Step 1: Brain-only mask
-    % 
-    %     img = imread(fullfile( ...
-    %                  testMatchingFiles(i).folder, ...
-    %                  testMatchingFiles(i).name));
-    % 
-    %     % Step 2: Otsu's method
-    %     otsu_pred = OtsuMethod(img);
-    %     otsu_similarity = dice(otsu_pred, groundTruth);
-    % 
-    %     fileName = testMatchingFiles(i).name;
-    %     printScores("Otsu", fileName, otsu_pred, enchancing, wholeTumor);
-    % 
-    %     % Step 3: Multi-Otsu
-    % 
-    %     multi_otsu_pred = MultiOtsuMethod(img);
-    %     printScores("Multi Otsu", fileName, multi_otsu_pred, enchancing, wholeTumor);
-    % end
+    kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor);
+    
+    displayK = 4;
+    displayMasks = kMeansMasks{displayK};
+   
+    showSliceComparison(testMatchingFiles, wholeTumor, ...
+        otsuMasks, multiOtsuMasks, ...
+        displayMasks, displayK);
 end
 
+ 
+%% Evaluation / Helper Functions
 
-%% Evaluation Functions
 function roll = dice(pred, gt)
     roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
 end
@@ -223,13 +249,30 @@ function score = jaccard(pred, gt)
     score = nnz(pred & gt) / nnz(pred | gt);
 end
 
+function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
+    files = dir(fullfile(outputFolder, '*', ...
+        sprintf('*%s*slice_%03d.png', patientID, sliceNum)));
+    names = {files.name};
+    
+    mods = ["t1n" "t1c" "t2w" "t2f"];
+    imgs = cell(1, numel(mods));
+    for m = 1:numel(mods)
+        f = files(contains(names, "-" + mods(m) + "_"));
+        imgs{m} = imread(fullfile(f(1).folder, f(1).name));
+    end
+    stack = cat(3, imgs{:});
+    
+    f = files(contains(names, "-seg_"));
+    gt = imread(fullfile(f(1).folder, f(1).name));
+end
+
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
 %% 
 
                                 % Lol JAN
-function path = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
-    if(name == "Joesph")
-        path = Joesph_sharedPath;
+function path = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
+    if(name == "Joseph")
+        path = Joseph_sharedPath;
     elseif(name == "Aaron")
           path = Aaron_sharedPath;
     elseif(name == "Neeka")
@@ -240,12 +283,12 @@ function path = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_share
 end
 
 % Loading in data, for now replace the below with your own local files
-Joesph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
+Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
 Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
 Neeka_sharedPath = "UNKNOWN"; % Neeka please add lol
 
 name = "Aaron";
-sharedPath = deterPath(name, Joesph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
+sharedPath = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
 
 % Extract file paths
 parentFolder  = fullfile(sharedPath,   "BraTS2026subset");
