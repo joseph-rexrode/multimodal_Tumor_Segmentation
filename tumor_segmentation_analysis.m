@@ -117,6 +117,21 @@ function pred = KMeansMultiMethod(stack, k, targetChannel)
     pred(brainOnly) = (idx == tumorCluster);
 end
 
+function pred = FuzzyCMeansMethod(img, k)
+
+brainOnly = img > 0;
+x = double(img(brainOnly));
+
+    [centers, U] = fcm(x, k);
+    [~, tumorCluster] = max(centers);
+    [~, labels] = max(U, [], 1);
+
+    pred = false(size(img));
+    pred(brainOnly) = labels == tumorCluster;
+
+end
+
+
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
         methodName, fileName, ...
@@ -139,7 +154,7 @@ function predictions = scoreSliceImages(methodName, segmentMethod, testMatchingF
     fprintf("\n")
 end
 
-function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimodalMask, displayK)
+function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimodalMask, fuzzyPred, displayK)
     nexttile;
     imshow(img, []);
     title(upper(mode) + "MRI");
@@ -159,9 +174,13 @@ function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimo
     nexttile;
     imshow(multimodalMask);
     title(sprintf("Multimodal K-means (k=%d)", displayK));
+
+    nexttile;
+    imshow(fuzzyPred);
+    title("Fuzzy C-Means (k=4)");
 end
 
-function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, displayK)
+function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, CfuzzyMasks, displayK)
     close all;
     % T1C: T1-wted with constrast: brightens areas, enhancing tumor areas
     % T1N: T1-wted with no constrast, Brain Anatomy with pre-contrast
@@ -190,12 +209,13 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
     
         otsuPred = ostuMasks{idx};
         multiOtsuPred = multiOtsuMasks{idx};
+        fuzzyPred = CfuzzyMasks{idx};
     
         figure("Name", file.name, "NumberTitle", "off");
-        tiledlayout(1, 5, "TileSpacing", "Compact");
+        tiledlayout(1, 6, "TileSpacing", "Compact");
     
         printCompTitles(mode, img, wholeTumor, otsuPred, ...
-        multiOtsuPred, multimodalMask, displayK)
+        multiOtsuPred, multimodalMask, fuzzyPred, displayK)
     end
 end
 
@@ -229,13 +249,14 @@ function runSliceTest(outputFolder)
     otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
     multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
     kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor);
+    CfuzzyMasks = scoreSliceImages("FCM k=4", @(img) FuzzyCMeansMethod(img, 4), testMatchingFiles, enhancing, wholeTumor);
     
     displayK = 4;
     displayMasks = kMeansMasks{displayK};
    
     showSliceComparison(testMatchingFiles, wholeTumor, ...
         otsuMasks, multiOtsuMasks, ...
-        displayMasks, displayK);
+        displayMasks, CfuzzyMasks, displayK);
 end
 
  
