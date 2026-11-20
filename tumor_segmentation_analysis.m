@@ -83,7 +83,7 @@ function pred = OtsuMethod(img)
     pred = imbinarize(img, threshold) & brainOnly;
 end
 
-function pred = MultiOtsuMethod(img)
+function pred = MultiOtsuMethod(img, threshold)
     brainOnly = img > 0;
     threshold = multithresh(img(brainOnly), 2);
     pred = (img > threshold(end)) & brainOnly;
@@ -118,22 +118,19 @@ function pred = KMeansMultiMethod(stack, k, targetChannel)
 end
 
 function pred = FuzzyCMeansMethod(img, k)
-
-brainOnly = img > 0;
-x = double(img(brainOnly));
-
+    brainOnly = img > 0;
+    x = double(img(brainOnly));
+    
     [centers, U] = fcm(x, k);
     [~, tumorCluster] = max(centers);
     [~, labels] = max(U, [], 1);
 
     pred = false(size(img));
     pred(brainOnly) = labels == tumorCluster;
-
 end
 
-
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
-    fprintf("%s | %s | Dice vs enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs whole: %.3f\n", ...
+    fprintf("%s | %s | Dice vs Enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs Whole: %.3f\n", ...
         methodName, fileName, ...
         dice(pred, enhancing), ...
         jaccard(pred, enhancing), dice(pred, wholeTumor));
@@ -154,33 +151,57 @@ function predictions = scoreSliceImages(methodName, segmentMethod, testMatchingF
     fprintf("\n")
 end
 
-function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimodalMask, fuzzyPred, displayK)
+% Prints % Prints % Prints % Prints % Prints % Prints 
+
+function printMRIType(mode, img)
     nexttile;
     imshow(img, []);
     title(upper(mode) + "MRI");
-    
+end
+
+function printRef(img)
     nexttile;
-    imshow(wholeTumor);
+    imshow(img);
     title("Reference: Whole Tumor");
-    
-    nexttile;
-    imshow(otsuPred);
-    title("Otsu");
-    
+end
+
+function printMultiOtsu(multiOtsuPred)
     nexttile;
     imshow(multiOtsuPred);
     title("Multi-Otsu");
+end
 
+function printOtsu(otsuPred)
+    nexttile;
+    imshow(otsuPred);
+    title("Otsu");
+end
+
+function printMultimodalMask(multimodalMask, displayK)
     nexttile;
     imshow(multimodalMask);
     title(sprintf("Multimodal K-means (k=%d)", displayK));
+end
 
+function printKMeans(fuzzyPred)
     nexttile;
     imshow(fuzzyPred);
     title("Fuzzy C-Means (k=4)");
 end
 
-function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, CfuzzyMasks, displayK)
+
+function printCompTitles(mode, img, wholeTumor, otsuPred, multiOtsuPred, multimodalMask, displayK, fuzzyPred)
+    printMRIType(mode, img);
+    printRef(wholeTumor);
+    printOtsu(otsuPred);
+    printMultiOtsu(multiOtsuPred);
+    printMultimodalMask(multimodalMask, displayK);
+    printKMeans(fuzzyPred);
+end
+
+% Prints % Prints % Prints % Prints % Prints % Prints 
+
+function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, displayK, CfuzzyMasks)
     close all;
     % T1C: T1-wted with constrast: brightens areas, enhancing tumor areas
     % T1N: T1-wted with no constrast, Brain Anatomy with pre-contrast
@@ -190,7 +211,7 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
     
     fileNames = string({testMatchingFiles.name});
     
-    for mode = ["t1c", "t2w"]
+    for mode = ["t1c", "t2w", "t2f", "t1n"]
         suffix = "-" + mode + "_slice_053.png";
         % Ideally endswith should've worked but I guess I need to update my
         % MATLAB? -Aaron
@@ -215,7 +236,7 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
         tiledlayout(1, 6, "TileSpacing", "Compact");
     
         printCompTitles(mode, img, wholeTumor, otsuPred, ...
-        multiOtsuPred, multimodalMask, fuzzyPred, displayK)
+        multiOtsuPred, multimodalMask, displayK, fuzzyPred)
     end
 end
 
@@ -228,16 +249,20 @@ function kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor)
     end
 end
 
-function runSliceTest(outputFolder)
+function runSliceTest(outputFolder, method)
+    arguments
+       outputFolder,
+       method ="All"
+    end
     testFilePattern = fullfile(outputFolder, ...
-                        '*', ...
-                        '*00008*slice_053.png');
+        '*', ...
+        '*00008*slice_053.png');
     testMatchingFiles = dir(testFilePattern);
     
     % BraTS segmentation being used as ground truth
     groundTruth = imread(fullfile( ...
-                            testMatchingFiles(1).folder, ...
-                            testMatchingFiles(1).name));
+        testMatchingFiles(1).folder, ...
+        testMatchingFiles(1).name));
     
     % categories for different parts of tumor, to be used for various
     % modalities as some reveal parts better than others
@@ -246,29 +271,29 @@ function runSliceTest(outputFolder)
     enhancing = groundTruth == 255;
     tumorCore = (groundTruth == 85) | (groundTruth == 255);
     
-    otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
-    multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
-    kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor);
-    CfuzzyMasks = scoreSliceImages("FCM k=4", @(img) FuzzyCMeansMethod(img, 4), testMatchingFiles, enhancing, wholeTumor);
-    
+    if(method == "Otsu" || method == "All")
+        otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
+    end
+    if(method == "Multi-Otsu" || method == "All")
+        multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
+    end
+    if(method == "K-means" || method == "All")
+        kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor);
+    end
+    if(method == "Fuzzy C-Means" || method == "All")
+        CfuzzyMasks =  scoreSliceImages("Fuzzy C-Means", ...
+        @(img) FuzzyCMeansMethod(img, 4), ...
+        testMatchingFiles, enhancing, wholeTumor);
+    end
     displayK = 4;
     displayMasks = kMeansMasks{displayK};
-   
+    
     showSliceComparison(testMatchingFiles, wholeTumor, ...
         otsuMasks, multiOtsuMasks, ...
-        displayMasks, CfuzzyMasks, displayK);
+        displayMasks, displayK, CfuzzyMasks);
 end
-
  
 %% Evaluation / Helper Functions
-
-function roll = dice(pred, gt)
-    roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
-end
-
-function score = jaccard(pred, gt)
-    score = nnz(pred & gt) / nnz(pred | gt);
-end
 
 function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
     files = dir(fullfile(outputFolder, '*', ...
@@ -287,19 +312,30 @@ function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
     gt = imread(fullfile(f(1).folder, f(1).name));
 end
 
-% main % main % main % main % main % main % main % main % main % main % main % main % main  
-                                % Lol JAN
+
+function roll = dice(pred, gt)
+    roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
+end
+
+function score = jaccard(pred, gt)
+    score = nnz(pred & gt) / nnz(pred | gt);
+end
+
 function path = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
     if(name == "Joseph")
         path = Joseph_sharedPath;
     elseif(name == "Aaron")
-          path = Aaron_sharedPath;
+        path = Aaron_sharedPath;
     elseif(name == "Neeka")
         path = Neeka_sharedPath;
     else
         path = "INVALID";
     end
 end
+
+
+% main % main % main % main % main % main % main % main % main % main % main % main % main  
+                                % Lol JAN
 
 % Loading in data, for now replace the below with your own local files
 Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
@@ -315,7 +351,7 @@ outputFolder  = fullfile(sharedPath,   "2DSlices");
 rawFolder     = fullfile(outputFolder, "raw");
 segmentFolder = fullfile(outputFolder, "groundTruth");
 
-% Run slicing algos: (Multi)Otsu
+% Run slicing Algos: (Multi)Otsu
 niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
 convert2DFiles(niiFiles, rawFolder, segmentFolder);
 runSliceTest(outputFolder);
