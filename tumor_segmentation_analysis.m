@@ -472,17 +472,17 @@ function [X, Y] = samplePixelData(inputImages, wholeTumorMasks, sliceIdx, sample
 end
 
 function [nnModel, trainInfo] = NeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
-    % if isfile(modelCacheFile)
-    %     cacheModel = load(modelCacheFile, "nnModel", "trainInfo");
-    %     nnModel = cacheModel.nnModel;
-    %     trainInfo = cacheModel.trainInfo;
-    %     fprintf("Loading cached Neural Network....\n");
-    %     return;
-    % else
+    if isfile(modelCacheFile)
+        cacheModel = load(modelCacheFile, "nnModel", "trainInfo");
+        nnModel = cacheModel.nnModel;
+        trainInfo = cacheModel.trainInfo;
+        fprintf("Loading cached Neural Network....\n");
+        return;
+    else
         [nnModel, trainInfo] = trainNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx);
         save(modelCacheFile, "nnModel", "trainInfo", "-v7.3");
         fprintf("Neural Network training Complete and Cached.\n");
-    % end
+    end
 end
 
 function [nnModel, trainInfo] = trainNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx)
@@ -599,7 +599,7 @@ function validScores = validateCLASS( ...
     end
 end
 
-function [validationPreds, validationDice] = validateByThreshold(validationScores, wholeTumorMasks, validationSlices)
+function [validationPreds, validationDice, bestThreshold] = validateByThreshold(validationScores, wholeTumorMasks, validationSlices)
     
     validationGroundTruth = wholeTumorMasks(:, :, validationSlices);
     thresholds = 0.10:0.05:0.90;
@@ -785,7 +785,7 @@ validationSlices = find(validationIdx);
 boostValidationScores = validateBoosting( ...
     validationSlices, boostModel, inputImages, wholeTumorMasks);
 
-[boostValidationPreds, boostValidationDice] = validateByThreshold( ...
+[validationPreds, validationDice, bestThreshold] = validateByThreshold( ...
     boostValidationScores, wholeTumorMasks, validationSlices...
 );
 
