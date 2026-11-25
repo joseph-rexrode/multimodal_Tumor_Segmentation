@@ -1146,12 +1146,3 @@ edemaMask      = makeRegionMask(groundTruthLabels, labelScheme, "Edema");
 tumorCoreMask  = makeRegionMask(groundTruthLabels, labelScheme, "TumorCore");
 enhancingMask  = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor");
 wholeTumorMask = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
-
-
-multiClosed = closePredictionSlices(multiPreds, 2);
-printMetrix("Multimodal K-means raw", multiPreds, validationGT);
-printMetrix("Multimodal K-means closed", multiClosed, validationGT);
-
-unetClosed = closePredictionSlices(unetPreds, 2);
-printMetrix("U-Net raw", unetPreds, validationGT);
-printMetrix("U-Net closed", unetClosed, validationGT);
