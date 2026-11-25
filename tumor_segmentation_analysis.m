@@ -130,8 +130,8 @@ end
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs Enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs Whole: %.3f\n", ...
         methodName, fileName, ...
-        dice(pred, enhancing), ...
-        jaccard(pred, enhancing), dice(pred, wholeTumor));
+        dice(pred, enhancing, true, 3), ...
+        jaccard(pred, enhancing), dice(pred, wholeTumor, true, 3));
 end
                                                             %SegMethod is a
                                                             %ANON function
@@ -199,7 +199,7 @@ end
 % Prints % Prints % Prints % Prints % Prints % Prints 
 
 function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsuMasks, displayMasks, displayK, CfuzzyMasks)
-    close all;
+    % close all;
     % T1C: T1-wted with constrast: brightens areas, enhancing tumor areas
     % T1N: T1-wted with no constrast, Brain Anatomy with pre-contrast
     % appearance
@@ -312,24 +312,78 @@ function [stack, gt] = loadSliceStack(outputFolder, patientID, sliceNum)
     unique(groundTruth)
 end
 
-function [inputImage, groundTruth, wholeTumor] = preprocessingSlice(PNGfiles)
-    fileNames = string({PNGfiles.name});
+function labelScheme = bratsMETLabelScheme()
+    % Stable Class IDs, semantic names, and regions that include each class
+    labelScheme = table(...
+          uint8((0:3)'), ...
+        ["Background"; "NonEnhancingTumorCore"; ...
+         "FLAIRHyperintensity"; "EnhancingTumor"], ...
+        {"Background"; ["TumorCore", "WholeTumor"]; ...
+         ["Edema", "WholeTumor"]; ...
+         ["EnhancingTumor", "TumorCore", "WholeTumor"]}, ...
+        uint8([0; 1; 2; 3]), ...
+        uint8([0; 85; 170; 255]), ...
+        'VariableNames', ...
+        {'ID', 'ClassName', 'Regions', 'SourceValue', 'LegacyPNGValue'})
+end
 
+function labelMap = decodeLabelMap(storedMask, labelScheme)
+    % Accept original labels 0–3 or the old normalized PNG values.
+    labelMap = zeros(size(storedMask), "uint8");
+    recognized = false(size(storedMask));
+
+    for k = 1:height(labelScheme)
+        sourcePixels = storedMask == labelScheme.SourceValue(k);
+        legacyPixels = storedMask == labelScheme.LegacyPNGValue(k);
+
+        labelMap(sourcePixels | legacyPixels) = labelScheme.ID(k);
+        recognized = recognized | sourcePixels | legacyPixels;
+    end
+
+    if ~all(recognized, "all")
+        unexpected = unique(storedMask(~recognized));
+        error("Unexpected segmentation pixel values: %s", ...
+            mat2str(unexpected(:)'));
+    end
+end
+
+
+function mask = makeRegionMask(labelMap, labelScheme, regionName)
+    % Build a binary mask for any named region in the scheme.
+    regionName = string(regionName);
+    belongsToRegion = cellfun( ...
+        @(regions) any(string(regions) == regionName), ...
+        labelScheme.Regions);
+
+    if ~any(belongsToRegion)
+        error("Region '%s' is not defined in the label scheme.", regionName);
+    end
+
+    mask = ismember(labelMap, labelScheme.ID(belongsToRegion));
+end
+function [inputImage, groundTruthLabels, wholeTumor] = preprocessingSlice(PNGFiles, labelScheme)
+    fileNames = string({PNGFiles.name});
     modes = ["t1n", "t1c", "t2w", "t2f"];
 
     firstIdx   = find(contains(fileNames, "-" + modes(1) + "_"), 1);
     % disp(firstIdx)
-    firstImage = imread(fullfile(PNGfiles(firstIdx).folder, PNGfiles(firstIdx).name));
+    firstImage = imread(fullfile(PNGFiles(firstIdx).folder, PNGFiles(firstIdx).name));
     inputImage = zeros([size(firstImage), 4], "like", firstImage);
 
     for c = 1:numel(modes)
         idx = find(contains(fileNames, "-" + modes(c) + "_"), 1);
-        inputImage(:, :, c) = imread(fullfile(PNGfiles(idx).folder, PNGfiles(idx).name));
+        inputImage(:, :, c) = imread(fullfile(PNGFiles(idx).folder, PNGFiles(idx).name));
     end
 
-    segIdx      = find(contains(fileNames, "-seg_"), 1);
-    groundTruth = imread(fullfile(PNGfiles(segIdx).folder, PNGfiles(segIdx).name));
-    wholeTumor  = groundTruth > 0;
+    segIdx = find(contains(fileNames, "-seg_"), 1);
+    storedMask = imread(fullfile(...
+        PNGFiles(segIdx).folder, PNGFiles(segIdx).name));
+
+    groundTruthLabels = decodeLabelMap(storedMask, labelScheme);
+     wholeTumor  = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
+
+    % groundTruth = imread(fullfile(PNGFiles(segIdx).folder, PNGFiles(segIdx).name));
+    % wholeTumor  = groundTruth > 0;
 
     % disp(size(inputImage));
     % disp(size(wholeTumor));
@@ -362,11 +416,17 @@ function [trainIdx, validationIdx, testIdx] = extractIndices(segNames, trainPati
     fprintf("Test Slices: %d\n",       nnz(testIdx));
 end
 
-function [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
-    patientTrainingDataRun(segmentFolder, outputFolder)
+function [inputImages, groundTruthLabels, wholeTumorMasks, ...
+    trainIdx, validationIdx, testIdx, segFiles] = ... 
+patientTrainingDataRun(segmentFolder, outputFolder)
+    
+    labelScheme = bratsMETLabelScheme();
+
+
     [segFiles, segNames] = extractSegInfo(segmentFolder);
     patientIDs = extractPatientInfo(segNames);
     
+
     % Training Data 
     % 775 samples split by patient
     trainPatients = ["00002", "00004", "00006"];
@@ -378,11 +438,13 @@ function [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFil
     
     sF = numel(segFiles);
     inputImages = zeros(240, 240, 4, sF, "uint8");
+    groundTruthLabels = zeros(240, 240, sF, "uint8");
     wholeTumorMasks = false(240, 240, sF);
 
     allPNGfiles = dir(fullfile(outputFolder, "*", "*slice_*.png"));
     allPNGnames = string({allPNGfiles.name});
     
+    groundTruthLabels = zeros(240, 240, sF, "uint8");
     for i = 1:numel(segFiles)
         fileName  = string(segFiles(i).name);
         patientID = extractBetween(fileName, "BraTS-MET-", "-000_");
@@ -394,8 +456,10 @@ function [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFil
             contains(allPNGnames, "BraTS-MET-" + patientID + "-") & ...
             endsWith(allPNGnames, "_slice_" + sliceText + ".png"));
 
-        [inputImage, groundTruth, wholeTumor] = preprocessingSlice(sliceFiles);
+        [inputImage, groundTruthLabel, wholeTumor] = preprocessingSlice(sliceFiles, labelScheme);
+        
         inputImages(:, :, :, i) = inputImage;
+        groundTruthLabels(:, :, i) = groundTruthLabel;
         wholeTumorMasks(:, :, i) = wholeTumor;
     
         if mod(i, 25) == 0 || i == numel(segFiles)
@@ -404,23 +468,56 @@ function [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFil
     end    
 end
 
-function [inputImages, wholeTumorMasks, ...
-    trainIdx, validationIdx, testIdx, segFiles]...
-    = patientTrainingData(segmentFolder, outputFolder)
+function [inputImages, groundTruthLabels, wholeTumorMasks, ...
+    trainIdx, validationIdx, testIdx, segFiles] = ...
+    patientTrainingData(segmentFolder, outputFolder)
 
     cacheFile = fullfile(outputFolder, "trainingData.mat");
+    dataCacheVersion = 2;
+    useCache = false;
     
     if isfile(cacheFile)
-        fprintf("Loading cached training data...\n");
-        load(cacheFile, "inputImages", "wholeTumorMasks", ...
-            "trainIdx", "validationIdx", "testIdx", "segFiles");
-    else
-        [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = patientTrainingDataRun(segmentFolder, outputFolder);
+        cacheInfo = whos("-file", cacheFile);
+        cacheNames = string({cacheInfo.name});
     
-        save(cacheFile, "inputImages", "wholeTumorMasks", ...
-            "trainIdx", "validationIdx", "testIdx", "segFiles", "-v7.3")
+        requiredNames = ["dataCacheVersion", "inputImages", ...
+            "groundTruthLabels", "wholeTumorMasks", "trainIdx", ...
+            "validationIdx", "testIdx", "segFiles"];
+    
+        if all(ismember(requiredNames, cacheNames))
+            cached = load(cacheFile, requiredNames{:});
+            useCache = cached.dataCacheVersion == dataCacheVersion;
+        end
+    end
+    
+    if useCache
+        fprintf("Loading cached training data...\n");
+        inputImages = cached.inputImages;
+        groundTruthLabels = cached.groundTruthLabels;
+        wholeTumorMasks = cached.wholeTumorMasks;
+        trainIdx = cached.trainIdx;
+        validationIdx = cached.validationIdx;
+        testIdx = cached.testIdx;
+        segFiles = cached.segFiles;
+    else
+        fprintf("Rebuilding cache with categorical labels...\n");
+        [inputImages, groundTruthLabels, wholeTumorMasks, ...
+            trainIdx, validationIdx, testIdx, segFiles] = ...
+            patientTrainingDataRun(segmentFolder, outputFolder);
+    
+        save(cacheFile, "dataCacheVersion", "inputImages", ...
+            "groundTruthLabels", "wholeTumorMasks", "trainIdx", ...
+            "validationIdx", "testIdx", "segFiles", "-v7.3");
     end
 end
+
+
+
+    % else
+    %     [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = patientTrainingDataRun(segmentFolder, outputFolder);
+    % 
+    %     save(cacheFile, "inputImages", "wholeTumorMasks", ...
+    %         "trainIdx", "validationIdx", "testIdx", "segFiles", "-v7.3");
 
 function [nnLayers, nnModel] = genNNModel()
     nnLayers = [
@@ -511,7 +608,7 @@ function [nnModel, trainInfo] = trainNeuralNetwork(inputImages, wholeTumorMasks,
 end
 
 function printSlices(ModelName, inputImages, wholeTumorMasks, validationPreds, sliceIdx, displayIdx)
-    close all;
+    % close all;
     figure;
     tiledlayout(1, 3);
     
@@ -618,7 +715,7 @@ function [validationPreds, validationDice, bestThreshold] = validateByThreshold(
     [validationDice, bestIdx] = max(diceByThreshold);
     bestThreshold = thresholds(bestIdx);
 
-    fprintf("Best validation Dice: %.4f at threshold %.2f\n", ...
+    fprintf("NN: 'Best Validation Score' Dice: %.4f at threshold %.2f\n", ...
         validationDice, bestThreshold);
 
     validationPreds = validationScores >= bestThreshold;
@@ -653,8 +750,8 @@ function runNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, testIdx, valid
     testDenom = nnz(testPreds) + nnz(testGroundTruth);
     testDice = 2 * nnz(testPreds & testGroundTruth) / testDenom;
     
-    fprintf("Test whole-tumor Dice at Threshold .55. %.4f\n", testDice);
-    
+    fprintf("NN: 'Test Score' whole-tumor Dice at Threshold 55%%: %.4f\n", testDice);
+
     
     files = dir(fullfile(outputFolder, '*', '*00008*slice_053.png'));
     names = string({files.name});
@@ -689,13 +786,28 @@ function boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx)
         );
 end
 
-function U_Network(intputImages, trainIdx)
-    % Separate training and Validation Images
+function options = uNetModelOptions(XValidation, YValidation)
+    options = trainingOptions("adam", ...
+    MaxEpochs = 15,...
+    MiniBatchSize = 2,...
+    InitialLearnRate = 1e-3,...
+    ValidationData = {XValidation, YValidation}, ...
+    ValidationFrequency = 50, ...
+    ValidationPatience = 3, ...
+    OutputNetwork = "best-validation", ...
+    Plots = "training-progress", ...
+    Verbose = true...
+    );
+end
+
+function [uNet, trainInfo] = build_U_Network( ...
+    inputImages, wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
+    
     XTrain = single(inputImages(:, :, :, trainIdx)) / 255;
     XValidation = single(inputImages(:, :, :, validationIdx)) / 255;
     
     % Convert binary Masks to Pixel labels: Bg or Fg: Background/Tumor
-    YTrain = categorical(uint8(wholeTumor(:, :, trainIdx)), ...
+    YTrain = categorical(uint8(wholeTumorMasks(:, :, trainIdx)), ...
         [0 1], ["Background", "Tumor"]);
     YValidation = categorical(uint8(wholeTumorMasks(:, :, validationIdx)), ...
         [0 1], ["Background", "Tumor"]);
@@ -709,10 +821,103 @@ function U_Network(intputImages, trainIdx)
     baselineNet = unet([240 240 4], 2, ...
         EncoderDepth = 3, NumFirstEncoderFilters=16);
     
+    options = uNetModelOptions(XValidation, YValidation);
+    
+    [uNet, trainInfo] = trainnet( ...
+        XTrain, YTrain, baselineNet, "crossentropy", options);
+    
+    save(modelCacheFile, "uNet", "trainInfo", "-v7.3");
+    fprintf("U-Net training complete and cached.\n");
+    
     size(XTrain)
     size(YTrain)
     size(XValidation)
     size(YValidation)
+
+end
+
+function [uNet, trainInfo] = U_Network_switch( ...
+inputImages , wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
+    % Separate training and Validation Images
+    
+    if isfile(modelCacheFile)
+         cache = load(modelCacheFile, "uNet", "trainInfo");
+         uNet = cache.uNet;
+         trainInfo = cache.trainInfo;
+         fprintf("Loading Cached U-net.... \n");
+         return;
+    end
+
+    [uNet, trainInfo] = build_U_Network( ...
+        inputImages , wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
+    
+end
+
+function validScores = validateUNet(slices, uNet, inputImages)
+    ht = size(inputImages, 1);
+    width = size(inputImages, 2);
+
+    validScores = zeros(ht, width, numel(slices), "single");
+
+    for i = 1:numel(slices)
+        img = single(inputImages(:, :, :, slices(i))) / 255;
+        img= reshape(img, ht, width, size(inputImages, 3), 1);
+
+        scores = minibatchpredict(uNet, img, MiniBatchSize = 1);
+
+        % Categories were created in Background, Tumor
+        % The second output channel is the tumor score.
+        validScores(:, :, i) = single(scores(:, :, 2, 1));
+    end
+end
+
+function checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles)
+    validationSlices = find(validationIdx);
+    
+    validScores = validateUNet(validationSlices, uNet, inputImages);
+    
+    thresholds = 0.10:0.05:0.90;
+    diceByThreshold = zeros(size(thresholds));
+    validationGroundTruth = wholeTumorMasks(:, :, validationSlices);
+    
+    for i = 1:numel(thresholds)
+        pred = validScores >= thresholds(i);
+        denom = nnz(pred) + nnz(validationGroundTruth);
+    
+        if denom > 0
+            diceByThreshold(i) = ...
+                2 * nnz(pred & validationGroundTruth) / denom;
+    
+        end
+    end
+    
+    [validationDice, bestIdx] = max(diceByThreshold);
+    bestThreshold = thresholds(bestIdx);
+    validationPreds = validScores >= bestThreshold;
+    
+    fprintf("U-Net validation Dice score: %.2f%% at threshold %.2f\n", ...
+        validationDice * 100, bestThreshold);
+    
+    verifySlice("U-Net Prediction", inputImages, wholeTumorMasks, ...
+        validationPreds, validationIdx, segFiles);
+end
+
+function [uNet, trainInfo] = U_Network( ...
+    inputImages, segFiles, wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
+
+    [uNet, trainInfo] = U_Network_switch( inputImages , wholeTumorMasks, ...
+        trainIdx, validationIdx, modelCacheFile);
+
+    checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles);
+end
+
+% Helpers
+function perc = makePercent(decimal, pts)
+    arguments 
+        decimal, pts = 4
+    end
+     num = sprintf("%.*f", pts, decimal * 100);
+    perc = string(num) + "%";
 end
 
 function roll = dice(pred, gt)
@@ -723,6 +928,7 @@ function score = jaccard(pred, gt)
     score = nnz(pred & gt) / nnz(pred | gt);
 end
 
+% Path Router
 function path = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath)
     if(name == "Joseph")
         path = Joseph_sharedPath;
@@ -731,18 +937,18 @@ function path = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_share
     elseif(name == "Neeka")
         path = Neeka_sharedPath;
     else
-        path = "INVALID";
+        error("Could not find the path to project files");
+        % path = "INVALID";
     end
 end
-
 
 % main % main % main % main % main % main % main % main % main % main % main % main % main  
                                 % Lol JAN
 
 % Loading in data, for now replace the below with your own local files
 Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProject";
-Aaron_sharedPath = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
-Neeka_sharedPath = "/Users/neeka/Documents/medicalimage analysis/finalproject";
+Aaron_sharedPath  = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
+Neeka_sharedPath  = "/Users/neeka/Documents/medicalimage analysis/finalproject";
 
 name = "Aaron";
 sharedPath = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
@@ -762,34 +968,57 @@ PNGFiles = dir(fullfile(outputFolder, '*', '*00008*slice_053.png'));
 % convert2DFiles(niiFiles, rawFolder, segmentFolder);
 % runSliceTest(outputFolder);
 
-
+close all; % close images from previous runs 
 % Machine Learning Training Set
-[inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
+% [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
+%     patientTrainingData(segmentFolder, outputFolder);
+
+[inputImages, groundTruthLabels, wholeTumorMasks, ...
+    trainIdx, validationIdx, testIdx, segFiles] = ...
     patientTrainingData(segmentFolder, outputFolder);
 
+labelScheme = bratsMETLabelScheme();
+
+for k = 1:height(labelScheme)
+    fprintf("%s (ID %d): %d pixels\n", ...
+        labelScheme.ClassName(k), labelScheme.ID(k), ...
+        nnz(groundTruthLabels == labelScheme.ID(k)));
+end
+
 trainingMasks = wholeTumorMasks(:, :, trainIdx);
-nnz(trainingMasks) / numel(trainingMasks);
+nnz(trainingMasks)/numel(trainingMasks);
 
 % [stack, groundTruth] = loadSliceStack(outputFolder, "00002", 1);
 % [stack, groundTruth] = loadSliceStack(outputFolder, "00008", 53);
 % unique(groundTruth)
 % nnz(groundTruth > 0)
 
-modelCacheFile = fullfile(outputFolder, "pixelNN.mat");
-runNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, testIdx, validationIdx, modelCacheFile, segFiles, outputFolder);
+% modelCacheFile = fullfile(outputFolder, "pixelNN.mat");
+% runNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, testIdx, validationIdx, modelCacheFile, segFiles, outputFolder);
 
 % boosting
-boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
+% boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
+% 
+% validationSlices = find(validationIdx);
+% boostValidationScores = validateBoosting( ...
+%     validationSlices, boostModel, inputImages, wholeTumorMasks);
+% 
+% [validationPreds, validationDice, bestThreshold] = validateByThreshold( ...
+%     boostValidationScores, wholeTumorMasks, validationSlices...
+% );
 
-validationSlices = find(validationIdx);
-boostValidationScores = validateBoosting( ...
-    validationSlices, boostModel, inputImages, wholeTumorMasks);
+% fprintf("Boosting Validation Dice: %s\n",  makePercent(boostValidationDice));
+% verifySlice("Boosting Prediction", inputImages, wholeTumorMasks, boostValidationPreds, validationIdx, segFiles);
+% 
 
-[validationPreds, validationDice, bestThreshold] = validateByThreshold( ...
-    boostValidationScores, wholeTumorMasks, validationSlices...
-);
+uNetCacheFile = fullfile(outputFolder, "unet_baseline.mat");
 
-fprintf("Boosting validation Dice: %.4f\n", boostValidationDice);
-verifySlice("Boosting Prediction", inputImages, wholeTumorMasks, boostValidationPreds, validationIdx, segFiles);
+[uNet, trainInfo] = U_Network( ...
+    inputImages, segFiles, wholeTumorMasks, trainIdx, ...
+    validationIdx, uNetCacheFile);
 
 
+edemaMask = makeRegionMask(groundTruthLabels, labelScheme, "Edema");
+tumorCoreMask = makeRegionMask(groundTruthLabels, labelScheme, "TumorCore");
+enhancingMask = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor");
+wholeTumorMask = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
