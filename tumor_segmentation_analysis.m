@@ -115,11 +115,20 @@ function pred = KMeansMultiMethod(stack, k, targetChannel)
     pred(brainOnly) = (idx == tumorCluster);
 end
 
-function pred = FuzzyCMeansMethod(img, k)
+function pred = FuzzyCMeansMethod(img, k, debugging)
+    arguments
+        img, k, debugging = false
+    end
+
     brainOnly = img > 0;
     x = double(img(brainOnly));
+    if debugging % the debugging printouts
+        [centers, U] = fcm(x, k); % This line can be restored if needed
+    else
+        options = fcmOptions(NumClusters=k, Verbose=false);
+        [centers, U] = fcm(x, options);
+    end
     
-    [centers, U] = fcm(x, k);
     [~, tumorCluster] = max(centers);
     [~, labels] = max(U, [], 1);
 
@@ -130,8 +139,10 @@ end
 function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     fprintf("%s | %s | Dice vs Enhancing: %.3f | Jaccard vs Enchancing: %.3f | Dice vs Whole: %.3f\n", ...
         methodName, fileName, ...
-        dice(pred, enhancing, true, 3), ...
-        jaccard(pred, enhancing), dice(pred, wholeTumor, true, 3));
+        dice(pred, enhancing), ...
+        jaccard(pred, enhancing), dice(pred, wholeTumor));
+    printMetrix(methodName + " vs Enhancing", pred, enhancing);
+    printMetrix(methodName + " vs Whole Tumor", pred, wholeTumor);
 end
                                                             %SegMethod is a
                                                             %ANON function
@@ -422,7 +433,6 @@ patientTrainingDataRun(segmentFolder, outputFolder)
     
     labelScheme = bratsMETLabelScheme();
 
-
     [segFiles, segNames] = extractSegInfo(segmentFolder);
     patientIDs = extractPatientInfo(segNames);
     
@@ -696,8 +706,13 @@ function validScores = validateCLASS( ...
     end
 end
 
-function [validationPreds, validationDice, bestThreshold] = validateByThreshold(validationScores, wholeTumorMasks, validationSlices)
+function [validationPreds, validationDice, bestThreshold] = ...
+validateByThreshold(validationScores, wholeTumorMasks, validationSlices, modelName)
     
+    if nargin < 4
+        modelName = "Model";
+    end
+
     validationGroundTruth = wholeTumorMasks(:, :, validationSlices);
     thresholds = 0.10:0.05:0.90;
 
@@ -719,6 +734,9 @@ function [validationPreds, validationDice, bestThreshold] = validateByThreshold(
         validationDice, bestThreshold);
 
     validationPreds = validationScores >= bestThreshold;
+
+    fprintf("%s validation Dice: %.2f%% at threshold %.2f\n", ...
+        modelName, validationDice * 100, bestThreshold);
 
 end
 
@@ -746,7 +764,9 @@ function runNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, testIdx, valid
     testScores = validateSlices(testSlices, nnModel, inputImages, wholeTumorMasks);
     testGroundTruth = wholeTumorMasks(:, :, testSlices);
     testPreds = testScores >= 0.55;
-    
+
+    printMetrix("Neural Network", testPreds, testGroundTruth);
+
     testDenom = nnz(testPreds) + nnz(testGroundTruth);
     testDice = 2 * nnz(testPreds & testGroundTruth) / testDenom;
     
@@ -783,7 +803,9 @@ function boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx)
         NumLearningCycles = 100, ... 
         LearnRate = 0.1, ...
         ScoreTransform = "doublelogit" ...
-        );
+    );
+
+   
 end
 
 function options = uNetModelOptions(XValidation, YValidation)
@@ -815,8 +837,7 @@ function [uNet, trainInfo] = build_U_Network( ...
     % Add the label-channel dims expected for image segmentation 
     YTrain      = reshape(YTrain, size(YTrain, 1), size(YTrain, 2), 1, []);
     YValidation = reshape(YValidation, size(YValidation, 1), size(YValidation, 2), 1, []);
-    
-    % 
+   
     % Create a compact, two-class U-Net for 240x240 image with 4 MRI channels
     baselineNet = unet([240 240 4], 2, ...
         EncoderDepth = 3, NumFirstEncoderFilters=16);
@@ -887,7 +908,6 @@ function checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, s
         if denom > 0
             diceByThreshold(i) = ...
                 2 * nnz(pred & validationGroundTruth) / denom;
-    
         end
     end
     
@@ -900,6 +920,8 @@ function checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, s
     
     verifySlice("U-Net Prediction", inputImages, wholeTumorMasks, ...
         validationPreds, validationIdx, segFiles);
+
+    printMetrix("U-Net validation", validationPreds, validationGroundTruth);
 end
 
 function [uNet, trainInfo] = U_Network( ...
@@ -909,6 +931,16 @@ function [uNet, trainInfo] = U_Network( ...
         trainIdx, validationIdx, modelCacheFile);
 
     checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles);
+    
+end
+
+function closedPreds = closePredictionsSlices(preds, radius)
+    se = strel("disk", radius, 0);
+    closedPreds = false(size(preds));
+
+    for i = 1:size(preds, 3)
+        closedPreds(:, :, i) = imclose(logical(preds(:, :, i)), se);
+    end
 end
 
 % Helpers
@@ -920,12 +952,81 @@ function perc = makePercent(decimal, pts)
     perc = string(num) + "%";
 end
 
+function pct = percentOrNaN(top, denom)
+    if denom == 0
+        pct = NaN;
+    else    
+        pct = 100 * top / denom;
+    end
+end
+
 function roll = dice(pred, gt)
-    roll = 2*nnz(pred & gt) / (nnz(pred) + nnz(gt));
+    denom = nnz(pred) + nnz(gt);
+    if denom == 0
+        roll = NaN;
+    else
+        roll = 2*nnz(pred & gt) / denom;
+    end
+     %percentOrNaN(2 * TP, 2 * TP + FP + FN);
 end
 
 function score = jaccard(pred, gt)
-    score = nnz(pred & gt) / nnz(pred | gt);
+    denom = nnz(pred | gt);
+    if denom == 0
+        score = NaN;
+    else
+        score = nnz(pred & gt) / denom;
+    end
+   % = percentOrNaN(TP, TP + FP + FN);
+end
+
+function metrics = compareRegionPixels(pred, gt)
+    assert(isequal(size(pred), size(gt)), ...
+        "Prediction and ground truth must have the same size");
+        % Only occurs when the dimensions are different between matrices
+            % e.g. (240 x 240) vs (256 x 256) would be rejected
+
+    pred = logical(pred);
+    gt = logical(gt);
+    
+    TP = nnz(pred & gt);
+    FP = nnz(pred & ~gt);
+    FN = nnz(~pred & gt);
+    TN = nnz(~pred & ~gt);
+    
+    % Of the pixels the model called (+), how many are in the GT?
+    metrics.PredictedInsideGT_pct = percentOrNaN(TP, TP + FP);
+    
+    % Of the pixels the model called (+), how many are NOT in the GT?
+    metrics.PredictedOutsideGT_pct = percentOrNaN(FP, TP + FP);
+    
+    % Of all GT_(+) Pixels, how many are RECOVERED in the model?
+    metrics.GroundTruthRecovered_pct = percentOrNaN(TP, TP + FN);
+    
+    % Of all GT_(-) Pixels, how many are REJECTED in the model?
+    metrics.BackgroundCorrect_pct  = percentOrNaN(TN, TN + FP);
+    
+    metrics.Dice = dice(pred, gt);
+    metrics.Jaccard = jaccard(pred, gt); 
+    metrics.TP = TP;
+    metrics.FP = FP;
+    metrics.FN = FN;
+    metrics.TN = TN;
+end
+    
+% NOTE: Supposed to be Metrics but shorter, 
+% you can change it to 'Metrics' if it
+% seems too much like Matrix mentally
+function printMetrix(methodName, pred, gt)
+    metrix = compareRegionPixels( ...
+        pred, gt);
+    
+    fprintf("\n%s\n", methodName);
+    fprintf("Predicted Inside GT: %.2f%%\n", metrix.PredictedInsideGT_pct);
+    fprintf("Predicted Outside GT: %.2f%%\n", metrix.PredictedOutsideGT_pct);
+    fprintf("Ground Truth Recovered: %.2f%%\n", metrix.GroundTruthRecovered_pct);
+    fprintf("Dice: %s\n", makePercent(metrix.Dice,2));
+    fprintf("Jaccard: %s\n", makePercent(metrix.Jaccard,2));
 end
 
 % Path Router
@@ -964,15 +1065,18 @@ PNGFiles = dir(fullfile(outputFolder, '*', '*00008*slice_053.png'));
 % segFiles = dir(fullfile(segmentFolder, '*seg_slice_*.png'));
 
 % Run slicing Algos: (Multi)Otsu
-% niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
-% convert2DFiles(niiFiles, rawFolder, segmentFolder);
-% runSliceTest(outputFolder);
-
 close all; % close images from previous runs 
-% Machine Learning Training Set
-% [inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
-%     patientTrainingData(segmentFolder, outputFolder);
+clc;       % close Graphs from previous runs 
 
+niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
+convert2DFiles(niiFiles, rawFolder, segmentFolder);
+runSliceTest(outputFolder);
+
+% Machine Learning Training Set
+[inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
+    patientTrainingData(segmentFolder, outputFolder);
+
+% UNIVERSAL TRAINING AND VALIDATION DATA SETS 
 [inputImages, groundTruthLabels, wholeTumorMasks, ...
     trainIdx, validationIdx, testIdx, segFiles] = ...
     patientTrainingData(segmentFolder, outputFolder);
@@ -997,15 +1101,35 @@ nnz(trainingMasks)/numel(trainingMasks);
 % runNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, testIdx, validationIdx, modelCacheFile, segFiles, outputFolder);
 
 % boosting
-% boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
-% 
-% validationSlices = find(validationIdx);
-% boostValidationScores = validateBoosting( ...
-%     validationSlices, boostModel, inputImages, wholeTumorMasks);
-% 
-% [validationPreds, validationDice, bestThreshold] = validateByThreshold( ...
-%     boostValidationScores, wholeTumorMasks, validationSlices...
-% );
+boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
+
+validationSlices = find(validationIdx);
+boostValidationScores = validateBoosting( ...
+    validationSlices, boostModel, inputImages, wholeTumorMasks);
+
+[boostValidationPreds, boostValidationDice, boostThreshold] = ...
+    validateByThreshold(boostValidationScores, wholeTumorMasks, ...
+    validationSlices, "Boosting");
+
+boostTestGroundTruth = wholeTumorMasks(:, :, validationSlices);
+printMetrix("Boosting Validation", boostValidationPreds, ...
+    boostTestGroundTruth);
+
+
+[validationPreds, validationDice, bestThreshold] = validateByThreshold( ...
+    boostValidationScores, wholeTumorMasks, validationSlices...
+);
+
+
+
+testSlices = find(testIdx);
+boostTestScores = validateBoosting( ...
+    testSlices, boostModel, inputImages, wholeTumorMasks);
+boostTestPreds = boostTestScores >= boostThreshold;
+boostTestGroundTruth = wholeTumorMasks(:, :, testSlices);
+
+printMetrix("Boosting test", boostTestPreds, boostTestGroundTruth);
+
 
 % fprintf("Boosting Validation Dice: %s\n",  makePercent(boostValidationDice));
 % verifySlice("Boosting Prediction", inputImages, wholeTumorMasks, boostValidationPreds, validationIdx, segFiles);
@@ -1018,7 +1142,16 @@ uNetCacheFile = fullfile(outputFolder, "unet_baseline.mat");
     validationIdx, uNetCacheFile);
 
 
-edemaMask = makeRegionMask(groundTruthLabels, labelScheme, "Edema");
-tumorCoreMask = makeRegionMask(groundTruthLabels, labelScheme, "TumorCore");
-enhancingMask = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor");
+edemaMask      = makeRegionMask(groundTruthLabels, labelScheme, "Edema");
+tumorCoreMask  = makeRegionMask(groundTruthLabels, labelScheme, "TumorCore");
+enhancingMask  = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor");
 wholeTumorMask = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
+
+
+multiClosed = closePredictionSlices(multiPreds, 2);
+printMetrix("Multimodal K-means raw", multiPreds, validationGT);
+printMetrix("Multimodal K-means closed", multiClosed, validationGT);
+
+unetClosed = closePredictionSlices(unetPreds, 2);
+printMetrix("U-Net raw", unetPreds, validationGT);
+printMetrix("U-Net closed", unetClosed, validationGT);
