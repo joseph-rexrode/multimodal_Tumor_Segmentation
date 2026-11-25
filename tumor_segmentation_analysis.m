@@ -73,6 +73,64 @@ end
 
 %%
 
+function predictions = cachedScoreSliceImages( ...
+    methodName, cacheKey, segmentMethod, testMatchingFiles, ...
+    enhancing, wholeTumor, cacheFolder)
+
+cacheFile = fullfile(cacheFolder, cacheKey + ".mat");
+sourcePaths = string(fullfile( ...
+    {testMatchingFiles.folder}, {testMatchingFiles.name}));
+sourceBytes = [testMatchingFiles.bytes];
+sourceDates = [testMatchingFiles.datenum];
+
+    if isfile(cacheFile)
+        fprintf("Opening cache for %s:\n  %s\n", methodName, cacheFile);
+        cache = load(cacheFile, "predictions", "cacheKey", ...
+            "sourcePaths", "sourceBytes", "sourceDates");
+    
+        cacheIsCurrent = isfield(cache, "predictions") && ...
+            isfield(cache, "cacheKey") && ...
+            isfield(cache, "sourcePaths") && ...
+            isfield(cache, "sourceBytes") && ...
+            isfield(cache, "sourceDates") && ...
+            cache.cacheKey == cacheKey && ...
+            isequal(cache.sourcePaths, sourcePaths) && ...
+            isequal(cache.sourceBytes, sourceBytes) && ...
+            isequal(cache.sourceDates, sourceDates);
+    
+        if cacheIsCurrent
+            predictions = cache.predictions;
+            fprintf("Using cached %s results from:\n  %s\n", ...
+                methodName, cacheFile);
+            printCachedSliceScores(methodName, testMatchingFiles, ...
+                predictions, enhancing, wholeTumor);
+            return;
+        end
+        
+        fprintf("Cache is stale; recomputing %s results.\n", methodName);
+    else
+        fprintf("No cache for %s; computing results for:\n  %s\n", ...
+            methodName, cacheFile);
+    end
+    
+    predictions = scoreSliceImages(methodName, segmentMethod, ...
+        testMatchingFiles, enhancing, wholeTumor);
+    
+    save(cacheFile, "predictions", "cacheKey", ...
+        "sourcePaths", "sourceBytes", "sourceDates", "-v7.3");
+    fprintf("Saved %s cache to:\n  %s\n", methodName, cacheFile);
+end
+
+function printCachedSliceScores(methodName, files, predictions, enhancing, wholeTumor)
+    for i = 2:numel(files)
+        if ~isempty(predictions{i})
+            printScores(methodName, files(i).name, predictions{i}, ...
+                enhancing, wholeTumor);
+        end
+    end
+    fprintf("\n");
+end
+
 % testing one slice: 8-53
 
 function pred = OtsuMethod(img)
@@ -81,7 +139,7 @@ function pred = OtsuMethod(img)
     pred = imbinarize(img, threshold) & brainOnly;
 end
 
-function pred = MultiOtsuMethod(img, threshold)
+function pred = MultiOtsuMethod(img)
     brainOnly = img > 0;
     threshold = multithresh(img(brainOnly), 2);
     pred = (img > threshold(end)) & brainOnly;
@@ -144,8 +202,8 @@ function printScores(methodName, fileName, pred, enhancing, wholeTumor)
     printMetrix(methodName + " vs Enhancing", pred, enhancing);
     printMetrix(methodName + " vs Whole Tumor", pred, wholeTumor);
 end
-                                                            %SegMethod is a
-                                                            %ANON function
+
+                                                    %ANON function
 function predictions = scoreSliceImages(methodName, segmentMethod, testMatchingFiles, enhancing, wholeTumor)
     predictions = cell(size(testMatchingFiles));
 
@@ -170,7 +228,7 @@ end
 function printRef(img)
     nexttile;
     imshow(img);
-    title("Reference: Whole Tumor");
+    title(sprintf("Reference:\nWhole Tumor"));
 end
 
 function printMultiOtsu(multiOtsuPred)
@@ -188,7 +246,7 @@ end
 function printMultimodalMask(multimodalMask, displayK)
     nexttile;
     imshow(multimodalMask);
-    title(sprintf("Multimodal K-means (k=%d)", displayK));
+    title(sprintf("Multimodal K-means\n(k=%d)", displayK));
 end
 
 function printKMeans(fuzzyPred)
@@ -248,12 +306,16 @@ function showSliceComparison(testMatchingFiles, wholeTumor, ostuMasks, multiOtsu
     end
 end
 
-function kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor)
+function kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor, cacheFolder)
     kMeansMasks = cell(1, 5);
 
     for k = 2:5
-        kMeansMasks{k} = scoreSliceImages(sprintf("KMeans k=%d", k), ...
-            @(img) KMeansMethod(img, k), testMatchingFiles, enhancing, wholeTumor);
+        methodName = sprintf("KMeans k=%d", k);
+        cacheKey = sprintf("kmeans_k%d_slice053_v1", k);
+
+        kMeansMasks{k} = cachedScoreSliceImages( ...
+            methodName, cacheKey, @(img) KMeansMethod(img, k), ...
+            testMatchingFiles, enhancing, wholeTumor, cacheFolder);
     end
 end
 
@@ -262,6 +324,12 @@ function runSliceTest(outputFolder, method)
        outputFolder,
        method ="All"
     end
+
+    cacheFolder = fullfile(outputFolder, "model_cache");
+    if ~exist(cacheFolder, "dir")
+        mkdir(cacheFolder);
+    end
+
     testFilePattern = fullfile(outputFolder, ...
         '*', ...
         '*00008*slice_053.png');
@@ -279,20 +347,21 @@ function runSliceTest(outputFolder, method)
     enhancing = groundTruth == 255;
     tumorCore = (groundTruth == 85) | (groundTruth == 255);
     
-    if(method == "Otsu" || method == "All")
-        otsuMasks = scoreSliceImages("Otsu", @OtsuMethod, testMatchingFiles, enhancing, wholeTumor);
-    end
-    if(method == "Multi-Otsu" || method == "All")
-        multiOtsuMasks = scoreSliceImages("Multi-Otsu", @MultiOtsuMethod, testMatchingFiles, enhancing, wholeTumor);
-    end
-    if(method == "K-means" || method == "All")
-        kMeansMasks = runKmeans(testMatchingFiles, enhancing, wholeTumor);
-    end
-    if(method == "Fuzzy C-Means" || method == "All")
-        CfuzzyMasks =  scoreSliceImages("Fuzzy C-Means", ...
+       otsuMasks = cachedScoreSliceImages( ...
+        "Otsu", "otsu_slice053_v1", @OtsuMethod, ...
+        testMatchingFiles, enhancing, wholeTumor, cacheFolder);
+    
+    multiOtsuMasks = cachedScoreSliceImages( ...
+        "Multi-Otsu", "multi_otsu_slice053_v1", @MultiOtsuMethod, ...
+        testMatchingFiles, enhancing, wholeTumor, cacheFolder);
+    
+    kMeansMasks = runKmeans(testMatchingFiles, enhancing, ...
+        wholeTumor, cacheFolder);
+    
+    CfuzzyMasks = cachedScoreSliceImages( ...
+        "Fuzzy C-Means", "fuzzy_cmeans_k4_slice053_v1", ...
         @(img) FuzzyCMeansMethod(img, 4), ...
-        testMatchingFiles, enhancing, wholeTumor);
-    end
+        testMatchingFiles, enhancing, wholeTumor, cacheFolder);
     displayK = 4;
     displayMasks = kMeansMasks{displayK};
     
@@ -862,9 +931,14 @@ inputImages , wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
     % Separate training and Validation Images
     
     if isfile(modelCacheFile)
-         cache = load(modelCacheFile, "uNet", "trainInfo");
+         % cache = load(modelCacheFile, "uNet", "trainInfo");
+         % uNet = cache.uNet;
+         % trainInfo = cache.trainInfo;
+
+         cache = load(modelCacheFile, "uNet");
          uNet = cache.uNet;
-         trainInfo = cache.trainInfo;
+         trainInfo = [];
+
          fprintf("Loading Cached U-net.... \n");
          return;
     end
@@ -892,7 +966,7 @@ function validScores = validateUNet(slices, uNet, inputImages)
     end
 end
 
-function checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles)
+function [validationPreds, validationDice, bestThreshold] = checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles)
     validationSlices = find(validationIdx);
     
     validScores = validateUNet(validationSlices, uNet, inputImages);
@@ -924,23 +998,125 @@ function checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, s
     printMetrix("U-Net validation", validationPreds, validationGroundTruth);
 end
 
-function [uNet, trainInfo] = U_Network( ...
+function [uNet, trainInfo, validationPreds, validationDice, bestThreshold] = U_Network( ...
     inputImages, segFiles, wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
 
     [uNet, trainInfo] = U_Network_switch( inputImages , wholeTumorMasks, ...
         trainIdx, validationIdx, modelCacheFile);
 
-    checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles);
+    [validationPreds, validationDice, bestThreshold] = checkUNetThreshold(uNet, inputImages, wholeTumorMasks, validationIdx, segFiles);
     
 end
 
-function closedPreds = closePredictionsSlices(preds, radius)
+function closedPreds = openAndClosedPreds(preds, radius)
     se = strel("disk", radius, 0);
     closedPreds = false(size(preds));
 
     for i = 1:size(preds, 3)
-        closedPreds(:, :, i) = imclose(logical(preds(:, :, i)), se);
+        mask = imopen(logical(preds(:, :, i)), se);
+        closedPreds(:, :, i) = imclose(mask, se);
     end
+end
+
+function runClosedFusionAnalysis(uNet, unetValidationPreds, unetThreshold, ...
+    nnValidationPreds, nnTestPreds, boostValidationPreds, boostTestPreds, ...
+    inputImages, wholeTumorMasks, validationIdx, testIdx, segFiles)
+
+    validationSlices = find(validationIdx);
+    testSlices = find(testIdx);
+    validationGT = wholeTumorMasks(:, :, validationSlices);
+    testGT = wholeTumorMasks(:, :, testSlices);
+
+    % Apply the U-Net threshold chosen on validation to test.
+    unetTestScores = validateUNet(testSlices, uNet, inputImages);
+    unetTestPreds = unetTestScores >= unetThreshold;
+
+    % Close each method's masks separately.
+    closeRadius = 1;
+    nnValClosed = openAndClosedPreds(nnValidationPreds, closeRadius);
+    boostValClosed = openAndClosedPreds(boostValidationPreds, closeRadius);
+    unetValClosed = openAndClosedPreds(unetValidationPreds, closeRadius);
+
+    nnTestClosed = openAndClosedPreds(nnTestPreds, closeRadius);
+    boostTestClosed = openAndClosedPreds(boostTestPreds, closeRadius);
+    unetTestClosed = openAndClosedPreds(unetTestPreds, closeRadius);
+
+    % Choose the vote rule using validation only.
+    votesVal = double(nnValClosed) + ...
+        double(boostValClosed) + double(unetValClosed);
+    voteRules = 1:3;
+    diceByRule = zeros(size(voteRules));
+
+    for i = 1:numel(voteRules)
+        candidate = votesVal >= voteRules(i);
+        denom = nnz(candidate) + nnz(validationGT);
+        if denom > 0
+            diceByRule(i) = 2 * nnz(candidate & validationGT) / denom;
+        end
+    end
+
+    [bestDice, bestIdx] = max(diceByRule);
+    bestRule = voteRules(bestIdx);
+    fusionVal = votesVal >= bestRule;
+
+    fprintf("Closed fusion validation Dice: %.2f%% using %d-of-3 votes\n", ...
+        100 * bestDice, bestRule);
+    printMetrix("Closed fusion validation", fusionVal, validationGT);
+
+    % Apply the validation-selected rule to test.
+    votesTest = double(nnTestClosed) + ...
+        double(boostTestClosed) + double(unetTestClosed);
+    fusionTest = votesTest >= bestRule;
+
+    printMetrix("Closed fusion test", fusionTest, testGT);
+    verifySlice("Closed Swiss-cheese fusion", inputImages, wholeTumorMasks, ...
+        fusionVal, validationIdx, segFiles);
+end
+
+function runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
+    validationIdx, testIdx, segFiles, outputFolder)
+
+    validationSlices = find(validationIdx);
+    testSlices = find(testIdx);
+    
+    % Pixel Neural Network: choose Threshold on Validation, then Freeze it
+    pixelNNCacheFile = fullfile(outputFolder, "pixelNN.mat");
+    [nnModel, ~] = NeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx, pixelNNCacheFile);
+
+    nnValidationScores = validateSlices( ...
+        validationSlices, nnModel, inputImages, wholeTumorMasks);
+    [nnValidationPreds, ~, nnThreshold] = validateByThreshold( ...
+        nnValidationScores, wholeTumorMasks, validationSlices, ...
+        "Pixel neural network");
+
+nnTestScores = validateSlices( ...
+        testSlices, nnModel, inputImages, wholeTumorMasks);
+    nnTestPreds = nnTestScores >= nnThreshold;
+
+    % Boosting: choose threshold on validation, then freeze it
+    boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
+
+    boostValidationScores = validateBoosting( ...
+        validationSlices, boostModel, inputImages, wholeTumorMasks);
+    [boostValidationPreds, ~, boostThreshold] = validateByThreshold( ...
+        boostValidationScores, wholeTumorMasks, validationSlices, ...
+        "Boosting");
+
+    boostTestScores = validateBoosting( ...
+        testSlices, boostModel, inputImages, wholeTumorMasks);
+    boostTestPreds = boostTestScores >= boostThreshold;
+
+    % U-Net: its threshold is selected on validation
+    uNetCacheFile = fullfile(outputFolder, "unet_baseline.mat");
+    [uNet, ~, unetValidationPreds, ~, unetThreshold] = U_Network( ...
+        inputImages, segFiles, wholeTumorMasks, trainIdx, ...
+        validationIdx, uNetCacheFile);
+
+    % Compare raw/closed masks and validation-selected fusion on test
+    runClosedFusionAnalysis(uNet, unetValidationPreds, unetThreshold, ...
+        nnValidationPreds, nnTestPreds, ...
+        boostValidationPreds, boostTestPreds, inputImages, ...
+        wholeTumorMasks, validationIdx, testIdx, segFiles);
 end
 
 % Helpers
@@ -1022,11 +1198,11 @@ function printMetrix(methodName, pred, gt)
         pred, gt);
     
     fprintf("\n%s\n", methodName);
-    fprintf("Predicted Inside GT: %.2f%%\n", metrix.PredictedInsideGT_pct);
-    fprintf("Predicted Outside GT: %.2f%%\n", metrix.PredictedOutsideGT_pct);
+    fprintf("   Predicted Inside GT: %.2f%%\n", metrix.PredictedInsideGT_pct);
+    fprintf("  Predicted Outside GT: %.2f%%\n", metrix.PredictedOutsideGT_pct);
     fprintf("Ground Truth Recovered: %.2f%%\n", metrix.GroundTruthRecovered_pct);
-    fprintf("Dice: %s\n", makePercent(metrix.Dice,2));
-    fprintf("Jaccard: %s\n", makePercent(metrix.Jaccard,2));
+    fprintf("                  Dice: %s\n",     makePercent(metrix.Dice,2));
+    fprintf("               Jaccard: %s\n",     makePercent(metrix.Jaccard,2));
 end
 
 % Path Router
@@ -1067,15 +1243,13 @@ PNGFiles = dir(fullfile(outputFolder, '*', '*00008*slice_053.png'));
 % Run slicing Algos: (Multi)Otsu
 close all; % close images from previous runs 
 clc;       % close Graphs from previous runs 
+    % I think it clears the console too
 
 niiFiles = loadFiles(parentFolder, outputFolder, rawFolder, segmentFolder);
 convert2DFiles(niiFiles, rawFolder, segmentFolder);
 runSliceTest(outputFolder);
 
 % Machine Learning Training Set
-[inputImages, wholeTumorMasks, trainIdx, validationIdx, testIdx, segFiles] = ...
-    patientTrainingData(segmentFolder, outputFolder);
-
 % UNIVERSAL TRAINING AND VALIDATION DATA SETS 
 [inputImages, groundTruthLabels, wholeTumorMasks, ...
     trainIdx, validationIdx, testIdx, segFiles] = ...
@@ -1129,6 +1303,7 @@ boostTestPreds = boostTestScores >= boostThreshold;
 boostTestGroundTruth = wholeTumorMasks(:, :, testSlices);
 
 printMetrix("Boosting test", boostTestPreds, boostTestGroundTruth);
+% boosting Neural Network^^^
 
 
 % fprintf("Boosting Validation Dice: %s\n",  makePercent(boostValidationDice));
@@ -1147,11 +1322,6 @@ tumorCoreMask  = makeRegionMask(groundTruthLabels, labelScheme, "TumorCore");
 enhancingMask  = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor");
 wholeTumorMask = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
 
-
-multiClosed = closePredictionSlices(multiPreds, 2);
-printMetrix("Multimodal K-means raw", multiPreds, validationGT);
-printMetrix("Multimodal K-means closed", multiClosed, validationGT);
-
-unetClosed = closePredictionSlices(unetPreds, 2);
-printMetrix("U-Net raw", unetPreds, validationGT);
-printMetrix("U-Net closed", unetClosed, validationGT);
+% Combined Model
+runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
+    validationIdx, testIdx, segFiles, outputFolder);
