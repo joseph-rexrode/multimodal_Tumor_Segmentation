@@ -549,10 +549,10 @@ end
 
 function [inputImages, groundTruthLabels, wholeTumorMasks, ...
     trainIdx, validationIdx, testIdx, segFiles] = ...
-    patientTrainingData(segmentFolder, outputFolder)
+    patientTrainingData(parentFolder, outputFolder)
 
     cacheFile = fullfile(outputFolder, "trainingData.mat");
-    dataCacheVersion = 2;
+    dataCacheVersion = 3;
     useCache = false;
     
     if isfile(cacheFile)
@@ -582,7 +582,7 @@ function [inputImages, groundTruthLabels, wholeTumorMasks, ...
         fprintf("Rebuilding cache with categorical labels...\n");
         [inputImages, groundTruthLabels, wholeTumorMasks, ...
             trainIdx, validationIdx, testIdx, segFiles] = ...
-            patientTrainingDataRun(segmentFolder, outputFolder);
+            buildSliceDataset(parentFolder, ["00002","00004","00006"], "00008", "00009");
     
         save(cacheFile, "dataCacheVersion", "inputImages", ...
             "groundTruthLabels", "wholeTumorMasks", "trainIdx", ...
@@ -624,7 +624,7 @@ function [X, Y] = samplePixelData(inputImages, wholeTumorMasks, sliceIdx, sample
         min(samplesPerClass, nnz(pixelLabels == categorical(c)))), 1:2, "UniformOutput", false);
 
     % One row per pixel; four cols in t1n, t1c, t2w, t2f order
-    pixelFeatures = reshape(permute(single(imgs), [1 2 4 3]), [], 4) / 255;
+    pixelFeatures = reshape(permute(single(imgs), [1 2 4 3]), [], 4);
 
     pixelLabels = reshape(wholeTumorMasks(:, :, sliceIdx), [], 1);
     brainPixels = reshape(any(imgs > 0, 3), [], 1);
@@ -761,7 +761,7 @@ function validScores = validateCLASS( ...
         brainPixels = find(any(img > 0, 3));
     
         if ~isempty(brainPixels)
-            pixelFeatures = reshape(single(img), [], 4) / 255;
+            pixelFeatures = reshape(single(img), [], 4);
             scores = predictFcn(pixelFeatures(brainPixels, :));
     
             pixelScores = zeros(ht * width, 1, "single");
@@ -894,8 +894,8 @@ end
 function [uNet, trainInfo] = build_U_Network( ...
     inputImages, wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
     
-    XTrain = single(inputImages(:, :, :, trainIdx)) / 255;
-    XValidation = single(inputImages(:, :, :, validationIdx)) / 255;
+    XTrain = single(inputImages(:, :, :, trainIdx));
+    XValidation = single(inputImages(:, :, :, validationIdx));
     
     % Convert binary Masks to Pixel labels: Bg or Fg: Background/Tumor
     YTrain = categorical(uint8(wholeTumorMasks(:, :, trainIdx)), ...
@@ -955,7 +955,7 @@ function validScores = validateUNet(slices, uNet, inputImages)
     validScores = zeros(ht, width, numel(slices), "single");
 
     for i = 1:numel(slices)
-        img = single(inputImages(:, :, :, slices(i))) / 255;
+        img = single(inputImages(:, :, :, slices(i)));
         img= reshape(img, ht, width, size(inputImages, 3), 1);
 
         scores = minibatchpredict(uNet, img, MiniBatchSize = 1);
@@ -1227,7 +1227,7 @@ Joseph_sharedPath = "/Users/josephrexrode/UTDallas/2026-2027/MATH6346/FinalProje
 Aaron_sharedPath  = "C:/Users/aaron/Downloads/School/UTD/Medical Image Analysis/Final Project/";
 Neeka_sharedPath  = "/Users/neeka/Documents/medicalimage analysis/finalproject";
 
-name = "Aaron";
+name = "Joseph";
 sharedPath = deterPath(name, Joseph_sharedPath, Aaron_sharedPath, Neeka_sharedPath);
 
 % Extract file paths
@@ -1253,7 +1253,7 @@ runSliceTest(outputFolder);
 % UNIVERSAL TRAINING AND VALIDATION DATA SETS 
 [inputImages, groundTruthLabels, wholeTumorMasks, ...
     trainIdx, validationIdx, testIdx, segFiles] = ...
-    patientTrainingData(segmentFolder, outputFolder);
+    patientTrainingData(parentFolder, outputFolder);
 
 labelScheme = bratsMETLabelScheme();
 
