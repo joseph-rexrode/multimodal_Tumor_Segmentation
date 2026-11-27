@@ -662,6 +662,7 @@ function [nnModel, trainInfo] = NeuralNetwork(inputImages, wholeTumorMasks, trai
 end
 
 function [nnModel, trainInfo] = trainNeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx)
+    rng(1);
     [XTrain, YTrain] ... 
         = samplePixelData(inputImages, wholeTumorMasks, trainIdx, 10000);
     [XValidation, YValidation] ...
@@ -943,7 +944,7 @@ inputImages , wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
          return;
     end
 
-    [uNet, trainInfo] = build_U_Network( ...
+    [uNet, trainInfo] = build_U_Network_Dice( ...
         inputImages , wholeTumorMasks, trainIdx, validationIdx, modelCacheFile)
     
 end
@@ -1073,51 +1074,51 @@ function runClosedFusionAnalysis(uNet, unetValidationPreds, unetThreshold, ...
         fusionVal, validationIdx, segFiles);
 end
 
-function runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
-    validationIdx, testIdx, segFiles, outputFolder)
-
-    validationSlices = find(validationIdx);
-    testSlices = find(testIdx);
-    
-    % Pixel Neural Network: choose Threshold on Validation, then Freeze it
-    pixelNNCacheFile = fullfile(outputFolder, "pixelNN.mat");
-    [nnModel, ~] = NeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx, pixelNNCacheFile);
-
-    nnValidationScores = validateSlices( ...
-        validationSlices, nnModel, inputImages, wholeTumorMasks);
-    [nnValidationPreds, ~, nnThreshold] = validateByThreshold( ...
-        nnValidationScores, wholeTumorMasks, validationSlices, ...
-        "Pixel neural network");
-
-nnTestScores = validateSlices( ...
-        testSlices, nnModel, inputImages, wholeTumorMasks);
-    nnTestPreds = nnTestScores >= nnThreshold;
-
-    % Boosting: choose threshold on validation, then freeze it
-    boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
-
-    boostValidationScores = validateBoosting( ...
-        validationSlices, boostModel, inputImages, wholeTumorMasks);
-    [boostValidationPreds, ~, boostThreshold] = validateByThreshold( ...
-        boostValidationScores, wholeTumorMasks, validationSlices, ...
-        "Boosting");
-
-    boostTestScores = validateBoosting( ...
-        testSlices, boostModel, inputImages, wholeTumorMasks);
-    boostTestPreds = boostTestScores >= boostThreshold;
-
-    % U-Net: its threshold is selected on validation
-    uNetCacheFile = fullfile(outputFolder, "unet_baseline.mat");
-    [uNet, ~, unetValidationPreds, ~, unetThreshold] = U_Network( ...
-        inputImages, segFiles, wholeTumorMasks, trainIdx, ...
-        validationIdx, uNetCacheFile);
-
-    % Compare raw/closed masks and validation-selected fusion on test
-    runClosedFusionAnalysis(uNet, unetValidationPreds, unetThreshold, ...
-        nnValidationPreds, nnTestPreds, ...
-        boostValidationPreds, boostTestPreds, inputImages, ...
-        wholeTumorMasks, validationIdx, testIdx, segFiles);
-end
+% function runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
+%     validationIdx, testIdx, segFiles, outputFolder)
+% 
+%     validationSlices = find(validationIdx);
+%     testSlices = find(testIdx);
+% 
+%     % Pixel Neural Network: choose Threshold on Validation, then Freeze it
+%     pixelNNCacheFile = fullfile(outputFolder, "pixelNN.mat");
+%     [nnModel, ~] = NeuralNetwork(inputImages, wholeTumorMasks, trainIdx, validationIdx, pixelNNCacheFile);
+% 
+%     nnValidationScores = validateSlices( ...
+%         validationSlices, nnModel, inputImages, wholeTumorMasks);
+%     [nnValidationPreds, ~, nnThreshold] = validateByThreshold( ...
+%         nnValidationScores, wholeTumorMasks, validationSlices, ...
+%         "Pixel neural network");
+% 
+% nnTestScores = validateSlices( ...
+%         testSlices, nnModel, inputImages, wholeTumorMasks);
+%     nnTestPreds = nnTestScores >= nnThreshold;
+% 
+%     % Boosting: choose threshold on validation, then freeze it
+%     boostModel = BoostModel(inputImages, wholeTumorMasks, trainIdx);
+% 
+%     boostValidationScores = validateBoosting( ...
+%         validationSlices, boostModel, inputImages, wholeTumorMasks);
+%     [boostValidationPreds, ~, boostThreshold] = validateByThreshold( ...
+%         boostValidationScores, wholeTumorMasks, validationSlices, ...
+%         "Boosting");
+% 
+%     boostTestScores = validateBoosting( ...
+%         testSlices, boostModel, inputImages, wholeTumorMasks);
+%     boostTestPreds = boostTestScores >= boostThreshold;
+% 
+%     % U-Net: its threshold is selected on validation
+%     uNetCacheFile = fullfile(outputFolder, "unet_dice.mat");
+%     [uNet, ~, unetValidationPreds, ~, unetThreshold] = U_Network( ...
+%         inputImages, segFiles, wholeTumorMasks, trainIdx, ...
+%         validationIdx, uNetCacheFile);
+% 
+%     % Compare raw/closed masks and validation-selected fusion on test
+%     runClosedFusionAnalysis(uNet, unetValidationPreds, unetThreshold, ...
+%         nnValidationPreds, nnTestPreds, ...
+%         boostValidationPreds, boostTestPreds, inputImages, ...
+%         wholeTumorMasks, validationIdx, testIdx, segFiles);
+% end
 
 % Helpers
 function perc = makePercent(decimal, pts)
@@ -1310,7 +1311,7 @@ printMetrix("Boosting test", boostTestPreds, boostTestGroundTruth);
 % verifySlice("Boosting Prediction", inputImages, wholeTumorMasks, boostValidationPreds, validationIdx, segFiles);
 % 
 
-uNetCacheFile = fullfile(outputFolder, "unet_baseline.mat");
+uNetCacheFile = fullfile(outputFolder, "unet_dice.mat");
 
 [uNet, trainInfo] = U_Network( ...
     inputImages, segFiles, wholeTumorMasks, trainIdx, ...
@@ -1323,5 +1324,8 @@ enhancingMask  = makeRegionMask(groundTruthLabels, labelScheme, "EnhancingTumor"
 wholeTumorMask = makeRegionMask(groundTruthLabels, labelScheme, "WholeTumor");
 
 % Combined Model
-runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
-    validationIdx, testIdx, segFiles, outputFolder);
+% runSegmentionModels(inputImages, wholeTumorMasks, trainIdx, ...
+%     validationIdx, testIdx, segFiles, outputFolder);
+
+results = compareModels(inputImages, wholeTumorMasks, validationIdx, testIdx, ...
+    fullfile(outputFolder, "pixelNN.mat"), uNetCacheFile);
